@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈黑名單偵測
 // @namespace    http://tampermonkey.net/
-// @version      1.0.7
+// @version      1.0.8
 // @author       udeyubi
 // @description  偵測將你加入黑名單的使用者，並可隱藏內容或自動反黑。
 // @match        https://forum.gamer.com.tw/C.php*
@@ -338,20 +338,22 @@
     });
   }
 
+  // 頁首導覽列與往下捲後出現的固定標題列各有一個「更多」選單，兩個都要加
   function installMenuItem() {
-    const list = document.querySelector('#BH-menu-path .BH-menu-forumA-right.dropList > dl');
-    if (!list || list.querySelector('[data-blk-settings]')) return;
-    const item = document.createElement('dd');
-    const link = document.createElement('a');
-    link.href = 'javascript:void(0)';
-    link.dataset.blkSettings = '1';
-    link.textContent = isLoggedIn ? ' 黑名單處理' : ' 黑名單處理（未登入）';
-    link.addEventListener('click', (event) => {
-      event.preventDefault();
-      openSettings();
+    document.querySelectorAll('.BH-menu-forumA-right.dropList > dl').forEach((list) => {
+      if (list.querySelector('[data-blk-settings]')) return;
+      const item = document.createElement('dd');
+      const link = document.createElement('a');
+      link.href = 'javascript:void(0)';
+      link.dataset.blkSettings = '1';
+      link.textContent = isLoggedIn ? ' 黑名單處理' : ' 黑名單處理（未登入）';
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        openSettings();
+      });
+      item.appendChild(link);
+      list.appendChild(item);
     });
-    item.appendChild(link);
-    list.appendChild(item);
   }
 
   injectStyles();
