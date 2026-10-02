@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈黑名單偵測
 // @namespace    http://tampermonkey.net/
-// @version      1.0.6
+// @version      1.0.7
 // @author       udeyubi
 // @description  偵測將你加入黑名單的使用者，並可隱藏內容或自動反黑。
 // @match        https://forum.gamer.com.tw/C.php*
@@ -93,22 +93,34 @@
     });
   }
 
+  const formatTime = (ms) => {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  // 快取格式 { s: 狀態, t: 最後確認時間, f: 首次偵測到黑單的時間（僅 blocked） }
   async function checkUser(uid) {
     const response = await fetchShop(uid);
-    if (!response) return 'unknown';
+    if (!response) return { s: 'unknown' };
 
     const { html, finalUrl } = response;
     if (/user\.gamer\.com\.tw\/login\.php/i.test(finalUrl)
       || /<form[^>]+action=["'][^"']*\/login\.php/i.test(html)) {
       log('登入狀態已失效，略過偵測', uid);
-      return 'unknown';
+      return { s: 'unknown' };
     }
 
+    // 被對方黑單時，送禮對象不會切換，頁面仍顯示上一個成功查詢的帳號
     const match = html.match(/class=["']AR-myar6["'][^>]*>\s*帳號：([A-Za-z0-9_]+)/);
     const status = match && match[1].toLowerCase() !== uid.toLowerCase() ? 'blocked' : 'ok';
-    cache[uid] = { s: status, t: Date.now() };
+    const now = Date.now();
+    const previous = cache[uid];
+    const entry = { s: status, t: now };
+    if (status === 'blocked') entry.f = previous?.s === 'blocked' ? (previous.f || previous.t) : now;
+    cache[uid] = entry;
     saveCache();
-    return status;
+    return entry;
   }
 
   function collectTargets(root = document) {
@@ -133,10 +145,10 @@
     return targets;
   }
 
-  function mark(elements, status) {
-    if (status !== 'blocked') return;
+  function mark(elements, entry) {
+    if (entry?.s !== 'blocked') return;
 
-    addBlockedBadge(elements);
+    addBlockedBadge(elements, entry);
     if (!settings.hideBlockedContent) return;
 
     const removed = new Set();
@@ -150,14 +162,15 @@
     log('已隱藏內容', removed.size);
   }
 
-  function addBlockedBadge(elements) {
+  function addBlockedBadge(elements, entry) {
+    const detectedAt = entry.f || entry.t;
     const anchors = new Set();
 
     elements.forEach((element) => {
       if (!element) return;
-      const section = element.closest('.c-section');
-      const anchor = section?.querySelector('.c-post__header__author a.userid')
-        || element.closest('.c-reply__item')?.querySelector('a.reply-content__user')
+      // 留言 .c-reply__item 包在樓層 .c-section 裡，必須先找留言，否則標籤會貼到樓主身上
+      const anchor = element.closest('.c-reply__item')?.querySelector('a.reply-content__user')
+        || element.closest('.c-section')?.querySelector('.c-post__header__author a.userid')
         || (element.matches('a.userid, a.reply-content__user') ? element : null);
       if (anchor) anchors.add(anchor);
     });
@@ -166,8 +179,8 @@
       if (anchor.parentElement?.querySelector(':scope > .blk-detected-badge')) return;
       const badge = document.createElement('span');
       badge.className = 'blk-detected-badge';
-      badge.textContent = '已偵測到將你黑單';
-      badge.title = '此使用者已將你加入黑名單';
+      badge.textContent = `已偵測到將你黑單 · ${formatTime(detectedAt)}`;
+      badge.title = `此使用者已將你加入黑名單\n首次偵測：${formatTime(detectedAt)}\n最後確認：${formatTime(entry.t)}`;
       anchor.insertAdjacentElement('afterend', badge);
     });
   }
@@ -198,7 +211,7 @@
     targets.forEach((elements, uid) => {
       const cached = cache[uid];
       if (cached && Date.now() - cached.t < cacheTtl) {
-        mark(elements, cached.s);
+        mark(elements, cached);
         elements.forEach((element) => (element.dataset.blkScanned = '1'));
         return;
       }
@@ -218,10 +231,10 @@
     queueRunning = true;
     while (pending.size && settings.enabled && isLoggedIn) {
       const [uid, entry] = pending.entries().next().value;
-      const status = await checkUser(uid);
-      log('偵測完成', uid, status);
-      if (status === 'blocked') await blockBack(uid);
-      mark(entry.elements, status);
+      const result = await checkUser(uid);
+      log('偵測完成', uid, result.s);
+      if (result.s === 'blocked') await blockBack(uid);
+      mark(entry.elements, result);
       entry.elements.forEach((element) => {
         if (element?.isConnected) element.dataset.blkScanned = '1';
       });
